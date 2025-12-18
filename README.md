@@ -1,4 +1,4 @@
-# Group 4 Movie Recommender
+# CISCOS
 
 This is a Streamlit-based Movie Recommender System.
 
