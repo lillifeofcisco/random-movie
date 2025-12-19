@@ -43,7 +43,7 @@ def load_db():
     try:
         with open(USER_DB_FILE, 'r') as f:
             return json.load(f)
-    except:
+    except (json.JSONDecodeError, IOError):
         return {}
 
 def save_db(data):
@@ -343,8 +343,11 @@ def main_app():
         content_sim_path = os.path.join(BASE_PATH, 'similarity.pkl.gz')
         collab_sim_path = os.path.join(BASE_PATH, 'collab_similarity.pkl.gz')
 
-        movie_dict = pickle.load(open(movie_dict_path, 'rb'))
-        collab_titles = pickle.load(open(collab_titles_path, 'rb'))
+        with open(movie_dict_path, 'rb') as f:
+            movie_dict = pickle.load(f)
+
+        with open(collab_titles_path, 'rb') as f:
+            collab_titles = pickle.load(f)
 
         with gzip.open(content_sim_path, 'rb') as f:
             content_sim = pickle.load(f)
