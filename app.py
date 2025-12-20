@@ -22,7 +22,8 @@ st.set_page_config(
 )
 
 # --- FILE PATHS ---
-USER_DB_FILE = 'user_database.json'
+BASE_PATH = os.path.dirname(os.path.abspath(__file__))
+USER_DB_FILE = os.path.join(BASE_PATH, 'user_database.json')
 
 # --- EMAIL CREDENTIALS ---
 SMTP_SERVER = "smtp.gmail.com"
@@ -167,6 +168,112 @@ def clear_user_history(username):
         save_db(db)
         return True
     return False
+
+# --- HELPER FUNCTIONS ---
+def find_movie_row(df, title):
+    match = df[df['title'].str.lower().str.strip() == title.lower().strip()]
+    if not match.empty:
+        return match.iloc[0]
+    match = df[df['title'].str.contains(title, case=False, na=False, regex=False)]
+    if not match.empty:
+        return match.iloc[0]
+    return None
+
+def get_recommendations(movie, method, movies_df, content_similarity, collab_similarity, collab_titles):
+    try:
+        recommended_titles = []
+
+        # 1. ENGINE SELECTION
+        if method == 'Content-Based Filtering':
+            idx = movies_df[movies_df['title'] == movie].index[0]
+            sim = content_similarity[idx]
+            scores = sorted(list(enumerate(sim)), key=lambda x: x[1], reverse=True)[1:6]
+            for i in scores:
+                recommended_titles.append(movies_df.iloc[i[0]].title)
+        else:
+            # Collaborative
+            # Assuming collab_titles is a list and matches the index of collab_similarity
+            idx = collab_titles.index(movie)
+            sim = collab_similarity[idx]
+            scores = sorted(list(enumerate(sim)), key=lambda x: x[1], reverse=True)[1:6]
+            for i in scores:
+                recommended_titles.append(collab_titles[i[0]])
+
+        # 2. FETCH DETAILS
+        result = []
+        for title in recommended_titles:
+
+            # CONTENT-BASED: Show Overview
+            if method == 'Content-Based Filtering':
+                row = find_movie_row(movies_df, title)
+                if row is not None:
+                    movie_info = row.get("overview", "No overview available.")
+                    if pd.isna(movie_info): movie_info = "No overview available."
+                else:
+                    movie_info = "No overview available."
+
+            # COLLABORATIVE: Hide Overview
+            else:
+                movie_info = ""
+
+            result.append({
+                'title': title,
+                'info': movie_info
+            })
+
+        return result
+
+    except Exception as e:
+        # In a real app, logging the error would be better than just returning empty
+        # print(f"Error getting recommendations: {e}")
+        return []
+
+# --- HISTORY POPUP DIALOG ---
+@st.dialog("📜 Historical Record")
+def show_history_popup(selected_movie, date, rec_titles):
+    st.subheader(f"Source: {selected_movie}")
+    st.caption(f"📅 Searched on: {date}")
+    st.divider()
+
+    display_text = ""
+    for i, title in enumerate(rec_titles, 1):
+        st.markdown(f"**{i}. {title}**")
+        display_text += f"{i}. {title}\n"
+
+    st.divider()
+
+    export_string = f"History Export (Group 4)\n\nMovie Searched: {selected_movie}\nDate: {date}\n\nRecommendations:\n{display_text}"
+
+    st.download_button(
+        label="💾 Download Record",
+        data=export_string,
+        file_name=f"History_{selected_movie.replace(' ', '_')}.txt",
+        mime="text/plain",
+        use_container_width=True
+    )
+
+# --- LOAD DATA ---
+@st.cache_data
+def load_data():
+    movie_dict_path = os.path.join(BASE_PATH, 'movie_dict.pkl')
+    collab_titles_path = os.path.join(BASE_PATH, 'collab_titles.pkl')
+    content_sim_path = os.path.join(BASE_PATH, 'similarity.pkl.gz')
+    collab_sim_path = os.path.join(BASE_PATH, 'collab_similarity.pkl.gz')
+
+    with open(movie_dict_path, 'rb') as f:
+        movie_dict = pickle.load(f)
+
+    with open(collab_titles_path, 'rb') as f:
+        collab_titles = pickle.load(f)
+
+    with gzip.open(content_sim_path, 'rb') as f:
+        content_sim = pickle.load(f)
+
+    with gzip.open(collab_sim_path, 'rb') as f:
+        collab_sim = pickle.load(f)
+
+    movies_df = pd.DataFrame(movie_dict)
+    return movies_df, content_sim, collab_sim, collab_titles
 
 # --- SESSION STATE INITIALIZATION ---
 if 'logged_in' not in st.session_state:
@@ -334,65 +441,9 @@ def login_page():
 
 # --- MAIN APP LOGIC ---
 def main_app():
-    # --- LOAD DATA ---
-    @st.cache_data
-    def load_data():
-        BASE_PATH = os.path.dirname(__file__)
-        movie_dict_path = os.path.join(BASE_PATH, 'movie_dict.pkl')
-        collab_titles_path = os.path.join(BASE_PATH, 'collab_titles.pkl')
-        content_sim_path = os.path.join(BASE_PATH, 'similarity.pkl.gz')
-        collab_sim_path = os.path.join(BASE_PATH, 'collab_similarity.pkl.gz')
 
-        with open(movie_dict_path, 'rb') as f:
-            movie_dict = pickle.load(f)
-
-        with open(collab_titles_path, 'rb') as f:
-            collab_titles = pickle.load(f)
-
-        with gzip.open(content_sim_path, 'rb') as f:
-            content_sim = pickle.load(f)
-
-        with gzip.open(collab_sim_path, 'rb') as f:
-            collab_sim = pickle.load(f)
-
-        movies_df = pd.DataFrame(movie_dict)
-        return movies_df, content_sim, collab_sim, collab_titles
-
+    # Load data
     movies_df, content_similarity, collab_similarity, collab_titles = load_data()
-
-    # --- HELPER FUNCTION ---
-    def find_movie_row(df, title):
-        match = df[df['title'].str.lower().str.strip() == title.lower().strip()]
-        if not match.empty:
-            return match.iloc[0]
-        match = df[df['title'].str.contains(title, case=False, na=False, regex=False)]
-        if not match.empty:
-            return match.iloc[0]
-        return None
-
-    # --- HISTORY POPUP DIALOG ---
-    @st.dialog("📜 Historical Record")
-    def show_history_popup(selected_movie, date, rec_titles):
-        st.subheader(f"Source: {selected_movie}")
-        st.caption(f"📅 Searched on: {date}")
-        st.divider()
-
-        display_text = ""
-        for i, title in enumerate(rec_titles, 1):
-            st.markdown(f"**{i}. {title}**")
-            display_text += f"{i}. {title}\n"
-
-        st.divider()
-
-        export_string = f"History Export (Group 4)\n\nMovie Searched: {selected_movie}\nDate: {date}\n\nRecommendations:\n{display_text}"
-
-        st.download_button(
-            label="💾 Download Record",
-            data=export_string,
-            file_name=f"History_{selected_movie.replace(' ', '_')}.txt",
-            mime="text/plain",
-            use_container_width=True
-        )
 
     # --- SESSION STATE ---
     if 'recommendations' not in st.session_state:
@@ -701,54 +752,6 @@ def main_app():
         st.session_state.selected_movie_name = None
         st.session_state.last_method = filter_method
 
-    def get_recommendations(movie, method):
-        try:
-            recommended_titles = []
-
-            # 1. ENGINE SELECTION
-            if method == 'Content-Based Filtering':
-                idx = movies_df[movies_df['title'] == movie].index[0]
-                sim = content_similarity[idx]
-                scores = sorted(list(enumerate(sim)), key=lambda x: x[1], reverse=True)[1:6]
-                for i in scores:
-                    recommended_titles.append(movies_df.iloc[i[0]].title)
-            else:
-                # Collaborative
-                idx = list(collab_titles).index(movie)
-                sim = collab_similarity[idx]
-                scores = sorted(list(enumerate(sim)), key=lambda x: x[1], reverse=True)[1:6]
-                for i in scores:
-                    recommended_titles.append(collab_titles[i[0]])
-
-            # 2. FETCH DETAILS
-            result = []
-            for title in recommended_titles:
-
-                # CONTENT-BASED: Show Overview
-                if method == 'Content-Based Filtering':
-                    row = find_movie_row(movies_df, title)
-                    if row is not None:
-                        movie_info = row.get("overview", "No overview available.")
-                        if pd.isna(movie_info): movie_info = "No overview available."
-                    else:
-                        movie_info = "No overview available."
-
-                # COLLABORATIVE: Hide Overview
-                else:
-                    movie_info = ""
-
-                # GENRE: Removed completely from Cards
-
-                result.append({
-                    'title': title,
-                    'info': movie_info
-                })
-
-            return result
-
-        except Exception as e:
-            return []
-
     def clear_results():
         st.session_state.recommendations = None
         st.session_state.selected_movie_name = None
@@ -772,7 +775,14 @@ def main_app():
         c1, c2 = st.columns([1, 1])
         with c1:
             if st.button('✨ Find Recommendations', type="primary", use_container_width=True):
-                recs = get_recommendations(selected_movie, filter_method)
+                recs = get_recommendations(
+                    selected_movie,
+                    filter_method,
+                    movies_df,
+                    content_similarity,
+                    collab_similarity,
+                    collab_titles
+                )
                 st.session_state.recommendations = recs
                 st.session_state.selected_movie_name = selected_movie
                 save_user_history(st.session_state.username, selected_movie, recs)
